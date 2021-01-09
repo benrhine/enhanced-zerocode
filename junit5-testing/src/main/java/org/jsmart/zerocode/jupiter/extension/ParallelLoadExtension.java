@@ -34,8 +34,16 @@ import static org.junit.jupiter.api.Assertions.fail;
 @API(status = EXPERIMENTAL)
 public class ParallelLoadExtension implements BeforeEachCallback {
     private static final Logger LOGGER = LoggerFactory.getLogger(ParallelLoadExtension.class);
-    private final ObjectMapper mapper = new ObjectMapperProvider().get();
-    private final ZeroCodeReportGenerator reportGenerator = new ZeroCodeReportGeneratorImpl(mapper);
+    private final ZeroCodeReportGenerator reportGenerator;
+
+    public ParallelLoadExtension() {
+        final ObjectMapper mapper = new ObjectMapperProvider().get();
+        this.reportGenerator = new ZeroCodeReportGeneratorImpl(mapper);
+    }
+
+    public ParallelLoadExtension(final ZeroCodeReportGenerator reportGenerator) {
+        this.reportGenerator = reportGenerator;
+    }
 
     @Override
     public void beforeEach(ExtensionContext extensionContext) throws Exception {

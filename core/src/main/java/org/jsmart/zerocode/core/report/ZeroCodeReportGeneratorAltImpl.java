@@ -13,11 +13,7 @@ import com.fasterxml.jackson.dataformat.csv.CsvSchema;
 import com.google.inject.Inject;
 import com.google.inject.name.Named;
 import org.apache.commons.lang.StringUtils;
-import org.jsmart.zerocode.core.domain.builders.ExtentReportsFactory;
-import org.jsmart.zerocode.core.domain.builders.HighChartColumnHtmlBuilder;
-import org.jsmart.zerocode.core.domain.builders.ZeroCodeChartKeyValueArrayBuilder;
-import org.jsmart.zerocode.core.domain.builders.ZeroCodeChartKeyValueBuilder;
-import org.jsmart.zerocode.core.domain.builders.ZeroCodeCsvReportBuilder;
+import org.jsmart.zerocode.core.domain.builders.*;
 import org.jsmart.zerocode.core.domain.reports.ZeroCodeExecResult;
 import org.jsmart.zerocode.core.domain.reports.ZeroCodeReport;
 import org.jsmart.zerocode.core.domain.reports.ZeroCodeReportStep;
@@ -36,22 +32,11 @@ import java.util.stream.Collectors;
 import static java.util.Collections.emptyList;
 import static java.util.Optional.ofNullable;
 import static org.apache.commons.lang.StringUtils.substringBetween;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.AUTHOR_MARKER_NEW;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.CATEGORY_MARKER;
-import static org.jsmart.zerocode.core.domain.builders.ExtentReportsFactory.getReportName;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.ANONYMOUS_CAT;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.AUTHOR_MARKER_OLD;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.DEFAULT_REGRESSION_CATEGORY;
+import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.*;
 import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.HIGH_CHART_HTML_FILE_NAME;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.LINK_LABEL_NAME;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.RESULT_PASS;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.TARGET_FILE_NAME;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.TARGET_FULL_REPORT_CSV_FILE_NAME;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.TARGET_FULL_REPORT_DIR;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.TARGET_REPORT_DIR;
-import static org.jsmart.zerocode.core.constants.ZeroCodeReportConstants.TEST_STEP_CORRELATION_ID;
+import static org.jsmart.zerocode.core.domain.builders.ExtentReportsFactory.getReportName;
 
-public class ZeroCodeReportGeneratorImpl implements ZeroCodeReportGenerator {
+public class ZeroCodeReportGeneratorAltImpl implements ZeroCodeReportGenerator {
     private static final Logger LOGGER = LoggerFactory.getLogger(ZeroCodeReportGeneratorImpl.class);
 
     private static String spikeChartFileName;
@@ -70,17 +55,23 @@ public class ZeroCodeReportGeneratorImpl implements ZeroCodeReportGenerator {
     @Named("interactive.html.report.disabled")
     private boolean interactiveHtmlReportDisabled;
 
+    private final Boolean groupResultByTest;
+
+    private final Boolean timestampTimeOnly;
+
     private final ObjectMapper mapper;
 
-    protected List<ZeroCodeReport> treeReports;
+    private List<ZeroCodeReport> treeReports;
 
     private List<ZeroCodeCsvReport> zeroCodeCsvFlattenedRows;
 
-    protected List<ZeroCodeCsvReport> csvRows = new ArrayList<>();
+    private List<ZeroCodeCsvReport> csvRows = new ArrayList<>();
 
     @Inject
-    public ZeroCodeReportGeneratorImpl(ObjectMapper mapper) {
+    public ZeroCodeReportGeneratorAltImpl(ObjectMapper mapper, Boolean groupResultByTest, Boolean timestampTimeOnly) {
         this.mapper = mapper;
+        this.groupResultByTest = groupResultByTest;
+        this.timestampTimeOnly = timestampTimeOnly;
     }
 
     /**
@@ -314,36 +305,96 @@ public class ZeroCodeReportGeneratorImpl implements ZeroCodeReportGenerator {
         }
     }
 
+    public Map<String, List<ZeroCodeExecResult>> groupByTestCase() {
+        Map<String, List<ZeroCodeExecResult>> map = new HashMap<>();
+
+        this.treeReports.forEach((thisReport) -> {
+            thisReport.getResults().forEach((thisResult) -> {
+                thisResult.getSteps().forEach((thisStep) -> {
+                    List<ZeroCodeExecResult> temp = new ArrayList<>();
+                    final String key = thisStep.getName();
+                    if (!map.containsKey(key)) {
+                        temp.add(thisResult);
+                        map.put(key, temp);
+                    } else {
+                        temp = map.get(key);
+                        temp.add(thisResult);
+                        map.put(key, temp);
+                    }
+                });
+            });
+        });
+
+        return map;
+    }
+
+    public void ungroupedRows(final ZeroCodeCsvReportBuilder csvFileBuilder) {
+        this.treeReports.forEach((thisReport) -> {
+            thisReport.getResults().forEach((thisResult) -> {
+                csvFileBuilder.scenarioLoop(thisResult.getLoop());
+                csvFileBuilder.scenarioName(thisResult.getScenarioName());
+                thisResult.getSteps().forEach((thisStep) -> {
+                    csvFileBuilder.stepLoop(thisStep.getLoop());
+                    csvFileBuilder.stepName(thisStep.getName());
+                    csvFileBuilder.correlationId(thisStep.getCorrelationId());
+                    csvFileBuilder.result(thisStep.getResult());
+                    csvFileBuilder.method(thisStep.getOperation());
+
+                    if (timestampTimeOnly) {
+                        csvFileBuilder.requestTimeStamp(thisStep.getRequestTimeStamp().toLocalTime().toString());
+                        csvFileBuilder.responseTimeStamp(thisStep.getResponseTimeStamp().toLocalTime().toString());
+                    } else {
+                        csvFileBuilder.requestTimeStamp(thisStep.getRequestTimeStamp().toString());
+                        csvFileBuilder.responseTimeStamp(thisStep.getResponseTimeStamp().toString());
+                    }
+                    csvFileBuilder.responseDelayMilliSec(thisStep.getResponseDelay());
+                    this.csvRows.add(csvFileBuilder.build());
+                });
+            });
+        });
+    }
+
+    public void groupedRows(final ZeroCodeCsvReportBuilder csvFileBuilder) {
+        final Map<String, List<ZeroCodeExecResult>> map = groupByTestCase();
+
+        map.forEach((key, value) -> {
+            value.forEach((thisResult) -> {
+                csvFileBuilder.scenarioLoop(thisResult.getLoop());
+                csvFileBuilder.scenarioName(thisResult.getScenarioName());
+                thisResult.getSteps().forEach((thisStep) -> {
+                    csvFileBuilder.stepLoop(thisStep.getLoop());
+                    csvFileBuilder.stepName(thisStep.getName());
+                    csvFileBuilder.correlationId(thisStep.getCorrelationId());
+                    csvFileBuilder.result(thisStep.getResult());
+                    csvFileBuilder.method(thisStep.getOperation());
+
+                    if (timestampTimeOnly) {
+                        csvFileBuilder.requestTimeStamp(thisStep.getRequestTimeStamp().toLocalTime().toString());
+                        csvFileBuilder.responseTimeStamp(thisStep.getResponseTimeStamp().toLocalTime().toString());
+                    } else {
+                        csvFileBuilder.requestTimeStamp(thisStep.getRequestTimeStamp().toString());
+                        csvFileBuilder.responseTimeStamp(thisStep.getResponseTimeStamp().toString());
+                    }
+                    csvFileBuilder.responseDelayMilliSec(thisStep.getResponseDelay());
+                    this.csvRows.add(csvFileBuilder.build());
+                });
+            });
+        });
+    }
+
     public List<ZeroCodeCsvReport> buildCsvRows() {
         /*
          * Map the java list to CsvPojo
          */
-        ZeroCodeCsvReportBuilder csvFileBuilder = ZeroCodeCsvReportBuilder.newInstance();
+        final ZeroCodeCsvReportBuilder csvFileBuilder = ZeroCodeCsvReportBuilder.newInstance();
 
-        treeReports.forEach(thisReport ->
-                thisReport.getResults().forEach(thisResult -> {
-
-                    csvFileBuilder.scenarioLoop(thisResult.getLoop());
-                    csvFileBuilder.scenarioName(thisResult.getScenarioName());
-
-                    thisResult.getSteps().forEach(thisStep -> {
-                        csvFileBuilder.stepLoop(thisStep.getLoop());
-                        csvFileBuilder.stepName(thisStep.getName());
-                        csvFileBuilder.correlationId(thisStep.getCorrelationId());
-                        csvFileBuilder.result(thisStep.getResult());
-                        csvFileBuilder.method(thisStep.getOperation());
-                        csvFileBuilder.requestTimeStamp(thisStep.getRequestTimeStamp().toString());
-                        csvFileBuilder.responseTimeStamp(thisStep.getResponseTimeStamp().toString());
-                        csvFileBuilder.responseDelayMilliSec(thisStep.getResponseDelay());
-
-                        /*
-                         * Add one by one row
-                         */
-                        csvRows.add(csvFileBuilder.build());
-
-                    });
-                })
-        );
+        if (groupResultByTest) {
+            LOGGER.info("#### Grouped rows ####");
+            this.groupedRows(csvFileBuilder);
+        } else {
+            LOGGER.info("#### Ungrouped rows ####");
+            this.ungroupedRows(csvFileBuilder);
+        }
 
         return csvRows;
     }
@@ -430,5 +481,4 @@ public class ZeroCodeReportGeneratorImpl implements ZeroCodeReportGenerator {
                 LocalDateTime.now().toString().replace(":", "-") +
                 ".html";
     }
-
 }
